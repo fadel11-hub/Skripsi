@@ -74,10 +74,6 @@ def main():
     data = load_data(selected_stock)
     data_load_state.text("Loading data... done!")
 
-    # Tampilkan kolom yang tersedia
-    st.subheader(f"Kolom yang tersedia dalam {selected_stock}:")
-    st.write(data.columns.tolist())
-
     # Pilih kolom untuk prediksi
     if "Adj Close" in data.columns:
         column = "Adj Close"
