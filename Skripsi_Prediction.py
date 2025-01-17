@@ -5,9 +5,10 @@ import numpy as np  # Library untuk perhitungan numerik
 import matplotlib.pyplot as plt  # Library untuk visualisasi data
 from sklearn.preprocessing import MinMaxScaler  # Digunakan untuk normalisasi data
 from tensorflow.keras.models import load_model  # Untuk memuat model deep learning
-from datetime import timedelta  # Untuk manipulasi tanggal
+from datetime import datetime, timedelta  # Untuk manipulasi tanggal
 import logging  # Logging untuk debugging
 import os  # Untuk operasi file
+import yfinance as yf
 
 # Mengatur logging untuk debugging
 logging.basicConfig(level=logging.INFO)
@@ -50,92 +51,105 @@ def predict_future_prices(model, scaler, data, window_size, days_ahead):
         # Menangkap error dan menampilkan pesan di Streamlit
         st.error(f"Terjadi kesalahan saat melakukan prediksi: {e}")
         return []
+    
+    # Fungsi untuk memuat data dari Yahoo Finance
+def load_data(ticker):
+    START = "2015-01-01"
+    TODAY = datetime.today().strftime("%Y-%m-%d")
+    data = yf.download(ticker, START, TODAY)
+    data.reset_index(inplace=True)  # Memastikan kolom Date tersedia
+    return data
 
 # Fungsi utama untuk aplikasi Streamlit
 def main():
-    # Membuat judul dan deskripsi aplikasi
-    st.title("Stock Price Prediction using BILSTM Model")
-    st.write("Predicting the future stock prices for PT Telkom Indonesia using an LSTM model.")
+    st.title("Prediksi Harga Saham PT Telkom Indonesia")
+    st.write("Aplikasi ini memprediksi harga saham menggunakan model LSTM.")
 
-    # Mengunggah file dataset
-    uploaded_file = st.file_uploader("Upload a CSV file containing stock data", type="csv")
+    # Pilihan saham
+    stocks = ("AAPL", "GOOG", "MSFT", "GME", "BBCA.JK", "TLKM.JK", "GOTO.JK")
+    selected_stock = st.selectbox("Pilih dataset untuk prediksi", stocks)
 
-    if uploaded_file:
-        # Membaca dataset dari file yang diunggah
-        df = pd.read_csv(uploaded_file)
-        # Mengecek apakah kolom 'Date' ada dalam dataset
-        if 'Date' not in df.columns:
-            st.error("Dataset harus memiliki kolom 'Date'.")
+    # Load data
+    data_load_state = st.text("Loading data...")
+    data = load_data(selected_stock)
+    data_load_state.text("Loading data... done!")
+
+    # Tampilkan kolom yang tersedia
+    st.subheader(f"Kolom yang tersedia dalam {selected_stock}:")
+    st.write(data.columns.tolist())
+
+    # Pilih kolom untuk prediksi
+    if "Adj Close" in data.columns:
+        column = "Adj Close"
+    elif "Close" in data.columns:
+        column = "Close"
+    else:
+        st.error("Kolom 'Adj Close' atau 'Close' tidak tersedia dalam dataset.")
+        return
+
+    st.subheader(f"Data {selected_stock} (menggunakan kolom '{column}')")
+    st.write(data.head())
+
+    # Konversi kolom Date ke datetime dan set sebagai indeks
+    if 'Date' not in data.columns:
+        st.error("Dataset tidak memiliki kolom 'Date'.")
+        return
+    data['Date'] = pd.to_datetime(data['Date'])
+    data.set_index('Date', inplace=True)
+
+    # Plot data historis
+    st.subheader("Grafik Harga Saham Historis")
+    plt.figure(figsize=(12, 6))
+    plt.plot(data[column], label="Harga Saham Historis")
+    plt.legend()
+    st.pyplot(plt)
+
+    # Memuat model dan scaler
+    model, scaler = load_model_and_scaler()
+    scaler.fit(data[[column]])
+
+    # Input parameter prediksi
+    days_ahead = st.number_input("Jumlah hari ke depan untuk prediksi:", min_value=1, max_value=365, value=7)
+    window_size = 10
+    if len(data) < window_size:
+        st.error(f"Data tidak cukup untuk prediksi. Minimal {window_size} data diperlukan.")
+        return
+
+    # Tombol untuk memulai prediksi
+    if st.button("Prediksi Harga Saham"):
+        # Memastikan dataset cukup panjang untuk prediksi
+        if days_ahead > len(data):
+            st.error(f"Jumlah hari untuk prediksi terlalu besar. Dataset hanya memiliki {len(data)} data.")
             return
-        # Mengubah kolom 'Date' menjadi format datetime dan menjadikannya sebagai indeks
-        df['Date'] = pd.to_datetime(df['Date'])
-        df.set_index('Date', inplace=True)
 
-        # Menampilkan preview dataset
-        st.subheader("Dataset Preview")
-        st.write(df.head())
-
-        # Memilih kolom untuk prediksi
-        column = st.selectbox("Pilih kolom untuk prediksi:", df.columns)
-        # Memastikan kolom yang dipilih berupa data numerik
-        if not np.issubdtype(df[column].dtype, np.number):
-            st.error("Kolom yang dipilih harus berupa data numerik.")
+        # Melakukan prediksi harga saham
+        predictions = predict_future_prices(model, scaler, data[[column]].values, window_size, days_ahead)
+        if predictions is None or len(predictions) == 0:
+            st.error("Prediksi gagal. Periksa kembali data atau konfigurasi model.")
             return
 
-        # Menampilkan grafik harga saham historis
-        st.subheader("Grafik Harga Saham Historis")
+        # Membuat dataframe hasil prediksi
+        future_dates = [data.index[-1] + timedelta(days=i) for i in range(1, days_ahead + 1)]
+        prediction_df = pd.DataFrame({"Tanggal": future_dates, "Harga Prediksi": predictions})
+
+        # Menampilkan hasil prediksi
+        st.subheader("Hasil Prediksi")
+        st.write(prediction_df)
+
+        # Menampilkan grafik hasil prediksi
+        st.subheader("Grafik Prediksi Harga Saham")
         plt.figure(figsize=(12, 6))
-        plt.plot(df[column], label="Harga Saham Historis")
+        plt.plot(data.index, data[column], label="Harga Historis")
+        plt.plot(future_dates, predictions, label="Harga Prediksi", linestyle="dashed", color="orange")
         plt.legend()
         st.pyplot(plt)
 
-        # Memuat model dan scaler
-        model, scaler = load_model_and_scaler()
-        if model is None or scaler is None:
-            return
-
-        # Melatih scaler menggunakan data kolom yang dipilih
-        scaler.fit(df[[column]])
-
-        # Input jumlah hari untuk prediksi
-        days_ahead = st.number_input("Jumlah hari ke depan untuk prediksi:", min_value=1, max_value=365, value=7)
-        window_size = 10  # Ukuran jendela untuk sliding window
-
-        # Tombol untuk memulai prediksi
-        if st.button("Prediksi Harga Saham"):
-            # Memastikan dataset cukup panjang untuk prediksi
-            if days_ahead > len(df):
-                st.error(f"Jumlah hari untuk prediksi terlalu besar. Dataset hanya memiliki {len(df)} data.")
-                return
-
-            # Melakukan prediksi harga saham
-            predictions = predict_future_prices(model, scaler, df[[column]].values, window_size, days_ahead)
-            if predictions is None or len(predictions) == 0:
-                st.error("Prediksi gagal. Periksa kembali data atau konfigurasi model.")
-                return
-
-            # Membuat dataframe hasil prediksi
-            future_dates = [df.index[-1] + timedelta(days=i) for i in range(1, days_ahead + 1)]
-            prediction_df = pd.DataFrame({"Tanggal": future_dates, "Harga Prediksi": predictions})
-
-            # Menampilkan hasil prediksi
-            st.subheader("Hasil Prediksi")
-            st.write(prediction_df)
-
-            # Menampilkan grafik hasil prediksi
-            st.subheader("Grafik Prediksi Harga Saham")
-            plt.figure(figsize=(12, 6))
-            plt.plot(df.index, df[column], label="Harga Historis")
-            plt.plot(future_dates, predictions, label="Harga Prediksi", linestyle="dashed", color="orange")
-            plt.legend()
-            st.pyplot(plt)
-
-            # Menambahkan opsi untuk mengunduh hasil prediksi
-            st.download_button(
-                label="Download Prediksi sebagai CSV",
-                data=prediction_df.to_csv(index=False),
-                file_name='prediksi_harga_saham.csv',
-                mime='text/csv',
+        # Menambahkan opsi untuk mengunduh hasil prediksi
+        st.download_button(
+            label="Download Prediksi sebagai CSV",
+            data=prediction_df.to_csv(index=False),
+            file_name='prediksi_harga_saham.csv',
+            mime='text/csv',
             )
 
 # Memulai aplikasi Streamlit
